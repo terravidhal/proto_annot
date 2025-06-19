@@ -15,6 +15,10 @@ export interface Annotation {
     width: number;
     height: number;
   };
+  // Add transformation properties
+  rotation?: number;
+  scaleX?: number;
+  scaleY?: number;
   confidence?: number;
   notes?: string;
 }
@@ -49,4 +53,11 @@ export interface ExportData {
     filename: string;
     annotations: Annotation[];
   }>;
+}
+
+// Add transformation handle types
+export interface TransformHandle {
+  type: 'corner' | 'edge' | 'rotation';
+  position: 'nw' | 'ne' | 'sw' | 'se' | 'n' | 's' | 'e' | 'w' | 'rotate';
+  point: Point;
 }
