@@ -82,13 +82,20 @@ function ImageAnnotationTool() {
               setCurrentImageIndex(prev => (prev + 1) % images.length);
             }
             break;
+          case 'delete':
+          case 'backspace':
+            if (selectedAnnotation) {
+              event.preventDefault();
+              handleAnnotationDelete(selectedAnnotation);
+            }
+            break;
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [images.length]);
+  }, [images.length, selectedAnnotation]);
 
   // Save to history
   const saveToHistory = useCallback(() => {
@@ -122,6 +129,7 @@ function ImageAnnotationTool() {
 
   const handleImageSelect = (index: number) => {
     setCurrentImageIndex(index);
+    setSelectedAnnotation(null); // Clear selection when switching images
   };
 
   const handleAnnotationAdd = (annotation: Annotation) => {
@@ -134,11 +142,30 @@ function ImageAnnotationTool() {
     ));
     
     setVisibleAnnotations(prev => new Set([...prev, annotation.id]));
+    setSelectedAnnotation(annotation.id); // Auto-select new annotation
     saveToHistory();
+  };
+
+  const handleAnnotationUpdate = (updatedAnnotation: Annotation) => {
+    if (!currentImage) return;
+
+    setImages(prev => prev.map(img => 
+      img.id === currentImage.id
+        ? { 
+            ...img, 
+            annotations: img.annotations.map(ann => 
+              ann.id === updatedAnnotation.id ? updatedAnnotation : ann
+            )
+          }
+        : img
+    ));
   };
 
   const handleAnnotationSelect = (id: string) => {
     setSelectedAnnotation(prev => prev === id ? null : id);
+    if (id && activeTool !== 'select') {
+      setActiveTool('select'); // Switch to select tool when selecting annotation
+    }
   };
 
   const handleAnnotationDelete = (id: string) => {
@@ -305,6 +332,7 @@ function ImageAnnotationTool() {
               image={currentImage}
               activeTool={activeTool}
               onAnnotationAdd={handleAnnotationAdd}
+              onAnnotationUpdate={handleAnnotationUpdate}
               onAnnotationSelect={handleAnnotationSelect}
               selectedAnnotation={selectedAnnotation}
               visibleAnnotations={visibleAnnotations}
