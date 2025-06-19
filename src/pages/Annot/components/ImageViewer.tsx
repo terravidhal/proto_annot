@@ -144,8 +144,8 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
         onAnnotationSelect(clickedAnnotation.id);
       } else {
         onAnnotationSelect(''); // Deselect
-        setIsPanning(true);
-        setLastMousePos({ x: event.clientX, y: event.clientY });
+        // REMOVED: Image panning is disabled when Select tool is active
+        // The user can only interact with annotations, not move the image
       }
     } else {
       // Start drawing
@@ -175,14 +175,34 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
     );
 
     // Update cursor based on what's under the mouse
-    if (activeTool === 'select' && selectedAnnotation) {
-      const selectedAnnotationObj = image.annotations.find(ann => ann.id === selectedAnnotation);
-      if (selectedAnnotationObj && selectedAnnotationObj.bounds) {
-        const handle = CanvasUtils.getHandleAtPoint(point, selectedAnnotationObj.bounds, 8 / scale);
-        if (handle) {
-          setCursor(CanvasUtils.getCursorForHandle(handle));
-        } else if (CanvasUtils.isPointInAnnotation(point, selectedAnnotationObj)) {
-          setCursor('move');
+    if (activeTool === 'select') {
+      let cursorSet = false;
+      
+      // Check if hovering over selected annotation's handles
+      if (selectedAnnotation) {
+        const selectedAnnotationObj = image.annotations.find(ann => ann.id === selectedAnnotation);
+        if (selectedAnnotationObj && selectedAnnotationObj.bounds) {
+          const handle = CanvasUtils.getHandleAtPoint(point, selectedAnnotationObj.bounds, 8 / scale);
+          if (handle) {
+            setCursor(CanvasUtils.getCursorForHandle(handle));
+            cursorSet = true;
+          }
+        }
+      }
+      
+      // Check if hovering over any annotation
+      if (!cursorSet) {
+        const hoveredAnnotation = image.annotations.find(annotation =>
+          visibleAnnotations.has(annotation.id) && 
+          CanvasUtils.isPointInAnnotation(point, annotation)
+        );
+        
+        if (hoveredAnnotation) {
+          if (hoveredAnnotation.id === selectedAnnotation) {
+            setCursor('move');
+          } else {
+            setCursor('pointer');
+          }
         } else {
           setCursor('default');
         }
@@ -193,7 +213,8 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       setCursor('default');
     }
     
-    if (isPanning) {
+    // Handle panning - ONLY when NOT using select tool
+    if (isPanning && activeTool !== 'select') {
       const deltaX = event.clientX - lastMousePos.x;
       const deltaY = event.clientY - lastMousePos.y;
       
@@ -245,7 +266,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       setCurrentAnnotation(updatedAnnotation);
     }
   }, [image, isDrawing, isPanning, isTransforming, currentAnnotation, scale, offset, lastMousePos, 
-      transformHandle, transformStartPoint, selectedAnnotation, onAnnotationUpdate, activeTool]);
+      transformHandle, transformStartPoint, selectedAnnotation, onAnnotationUpdate, activeTool, visibleAnnotations]);
 
   const handleMouseUp = useCallback(() => {
     if (isPanning) {
@@ -314,7 +335,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       <div className="flex-1 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center">
         <p className="text-gray-500">Select an image to begin annotation</p>
       </div>
-    );
+      );
   }
 
   return (
@@ -326,9 +347,14 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
           <span className="text-xs text-gray-500">
             {image.width} × {image.height}
           </span>
-          {selectedAnnotation && (
+          {selectedAnnotation && activeTool === 'select' && (
             <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded">
               Transform Mode
+            </span>
+          )}
+          {activeTool === 'select' && (
+            <span className="text-xs text-orange-600 bg-orange-100 px-2 py-1 rounded">
+              Image panning disabled - Select annotations only
             </span>
           )}
         </div>
