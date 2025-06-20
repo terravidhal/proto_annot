@@ -43,18 +43,22 @@ export class CanvasUtils {
         break;
     }
 
-    // Draw transform handles if selected and in transform mode
+    ctx.restore();
+
+    // Draw transform handles AFTER restoring context to avoid transformation issues
     if (isSelected && showTransformHandles && annotation.bounds) {
+      ctx.save();
       this.drawTransformHandles(ctx, annotation.bounds, scale);
+      ctx.restore();
     }
 
     // Only draw label if showLabel is true and label exists
     if (showLabel && annotation.label && annotation.bounds) {
+      ctx.save();
       this.drawLabel(ctx, annotation.label, 
         { x: annotation.bounds.x, y: annotation.bounds.y }, scale);
+      ctx.restore();
     }
-
-    ctx.restore();
   }
 
   private static drawRectangle(
@@ -109,7 +113,6 @@ export class CanvasUtils {
     const handleSize = 8 / scale;
     const handles = this.getTransformHandles(bounds);
     
-    ctx.save();
     ctx.fillStyle = '#3B82F6';
     ctx.strokeStyle = '#1E40AF';
     ctx.lineWidth = 1 / scale;
@@ -138,8 +141,6 @@ export class CanvasUtils {
         );
       }
     });
-
-    ctx.restore();
   }
 
   static getTransformHandles(bounds: NonNullable<Annotation['bounds']>): TransformHandle[] {
