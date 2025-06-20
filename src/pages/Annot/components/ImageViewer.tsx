@@ -28,9 +28,11 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [isTransforming, setIsTransforming] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [currentAnnotation, setCurrentAnnotation] = useState<Annotation | null>(null);
   const [transformHandle, setTransformHandle] = useState<TransformHandle | null>(null);
   const [transformStartPoint, setTransformStartPoint] = useState<Point | null>(null);
+  const [dragStartPoint, setDragStartPoint] = useState<Point | null>(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState<Point>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
@@ -134,7 +136,14 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
         }
       }
 
-      // Check if clicking on an annotation
+      // Check if clicking on the selected annotation for dragging
+      if (selectedAnnotationObj && CanvasUtils.isPointInAnnotation(point, selectedAnnotationObj)) {
+        setIsDragging(true);
+        setDragStartPoint(point);
+        return;
+      }
+
+      // Check if clicking on any other annotation
       const clickedAnnotation = image.annotations.find(annotation =>
         visibleAnnotations.has(annotation.id) && 
         CanvasUtils.isPointInAnnotation(point, annotation)
@@ -144,6 +153,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
         onAnnotationSelect(clickedAnnotation.id);
       } else {
         onAnnotationSelect(''); // Deselect
+        // Start panning if not clicking on annotation
         setIsPanning(true);
         setLastMousePos({ x: event.clientX, y: event.clientY });
       }
@@ -175,24 +185,40 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
     );
 
     // Update cursor based on what's under the mouse
-    if (activeTool === 'select' && selectedAnnotation) {
-      const selectedAnnotationObj = image.annotations.find(ann => ann.id === selectedAnnotation);
-      if (selectedAnnotationObj && selectedAnnotationObj.bounds) {
-        const handle = CanvasUtils.getHandleAtPoint(point, selectedAnnotationObj.bounds, 8 / scale);
-        if (handle) {
-          setCursor(CanvasUtils.getCursorForHandle(handle));
-        } else if (CanvasUtils.isPointInAnnotation(point, selectedAnnotationObj)) {
-          setCursor('move');
-        } else {
-          setCursor('default');
+    if (activeTool === 'select') {
+      let newCursor = 'default';
+      
+      // Check if hovering over selected annotation's handles
+      if (selectedAnnotation) {
+        const selectedAnnotationObj = image.annotations.find(ann => ann.id === selectedAnnotation);
+        if (selectedAnnotationObj && selectedAnnotationObj.bounds) {
+          const handle = CanvasUtils.getHandleAtPoint(point, selectedAnnotationObj.bounds, 8 / scale);
+          if (handle) {
+            newCursor = CanvasUtils.getCursorForHandle(handle);
+          } else if (CanvasUtils.isPointInAnnotation(point, selectedAnnotationObj)) {
+            newCursor = 'move';
+          }
         }
       }
+      
+      // Check if hovering over any other annotation
+      if (newCursor === 'default') {
+        const hoveredAnnotation = image.annotations.find(annotation =>
+          visibleAnnotations.has(annotation.id) && 
+          CanvasUtils.isPointInAnnotation(point, annotation)
+        );
+        
+        if (hoveredAnnotation) {
+          newCursor = 'pointer';
+        }
+      }
+      
+      setCursor(newCursor);
     } else if (activeTool !== 'select') {
       setCursor('crosshair');
-    } else {
-      setCursor('default');
     }
     
+    // Handle different mouse interactions
     if (isPanning) {
       const deltaX = event.clientX - lastMousePos.x;
       const deltaY = event.clientY - lastMousePos.y;
@@ -213,6 +239,28 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
           point
         );
         onAnnotationUpdate(transformedAnnotation);
+      }
+    } else if (isDragging && dragStartPoint && selectedAnnotation) {
+      const selectedAnnotationObj = image.annotations.find(ann => ann.id === selectedAnnotation);
+      if (selectedAnnotationObj && selectedAnnotationObj.bounds) {
+        const deltaX = point.x - dragStartPoint.x;
+        const deltaY = point.y - dragStartPoint.y;
+        
+        const draggedAnnotation = {
+          ...selectedAnnotationObj,
+          bounds: {
+            ...selectedAnnotationObj.bounds,
+            x: selectedAnnotationObj.bounds.x + deltaX,
+            y: selectedAnnotationObj.bounds.y + deltaY
+          },
+          points: selectedAnnotationObj.points.map(p => ({
+            x: p.x + deltaX,
+            y: p.y + deltaY
+          }))
+        };
+        
+        onAnnotationUpdate(draggedAnnotation);
+        setDragStartPoint(point);
       }
     } else if (isDrawing && currentAnnotation) {
       let updatedAnnotation = { ...currentAnnotation };
@@ -244,8 +292,9 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       
       setCurrentAnnotation(updatedAnnotation);
     }
-  }, [image, isDrawing, isPanning, isTransforming, currentAnnotation, scale, offset, lastMousePos, 
-      transformHandle, transformStartPoint, selectedAnnotation, onAnnotationUpdate, activeTool]);
+  }, [image, isDrawing, isPanning, isTransforming, isDragging, currentAnnotation, scale, offset, 
+      lastMousePos, transformHandle, transformStartPoint, dragStartPoint, selectedAnnotation, 
+      onAnnotationUpdate, activeTool, visibleAnnotations]);
 
   const handleMouseUp = useCallback(() => {
     if (isPanning) {
@@ -256,6 +305,11 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       setIsTransforming(false);
       setTransformHandle(null);
       setTransformStartPoint(null);
+    }
+    
+    if (isDragging) {
+      setIsDragging(false);
+      setDragStartPoint(null);
     }
     
     if (isDrawing && currentAnnotation) {
@@ -269,7 +323,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       }
       setCurrentAnnotation(null);
     }
-  }, [isDrawing, isPanning, isTransforming, currentAnnotation, onAnnotationAdd]);
+  }, [isDrawing, isPanning, isTransforming, isDragging, currentAnnotation, onAnnotationAdd]);
 
   const handleZoomIn = () => {
     setScale(prev => Math.min(5, prev * 1.2));
@@ -328,7 +382,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
           </span>
           {selectedAnnotation && (
             <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded">
-              Transform Mode
+              Selected - Use handles to transform
             </span>
           )}
         </div>
@@ -378,6 +432,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp} // Handle mouse leaving canvas
           className="w-full h-full"
         />
       </div>

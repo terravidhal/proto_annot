@@ -10,6 +10,8 @@ export class CanvasUtils {
     showTransformHandles: boolean = false
   ) {
     ctx.save();
+    
+    // Set styles
     ctx.strokeStyle = annotation.color;
     ctx.fillStyle = annotation.color + '20';
     ctx.lineWidth = 2 / scale;
@@ -17,23 +19,12 @@ export class CanvasUtils {
     if (isSelected) {
       ctx.setLineDash([5 / scale, 5 / scale]);
       ctx.lineWidth = 3 / scale;
+      ctx.strokeStyle = '#3B82F6'; // Blue for selected
+    } else {
+      ctx.setLineDash([]);
     }
 
-    // Apply transformations if they exist
-    if (annotation.bounds) {
-      const centerX = annotation.bounds.x + annotation.bounds.width / 2;
-      const centerY = annotation.bounds.y + annotation.bounds.height / 2;
-      
-      ctx.translate(centerX, centerY);
-      if (annotation.rotation) {
-        ctx.rotate(annotation.rotation);
-      }
-      if (annotation.scaleX || annotation.scaleY) {
-        ctx.scale(annotation.scaleX || 1, annotation.scaleY || 1);
-      }
-      ctx.translate(-centerX, -centerY);
-    }
-
+    // Draw the shape without transformations first
     switch (annotation.type) {
       case 'rectangle':
         this.drawRectangle(ctx, annotation.points, annotation.bounds);
@@ -48,7 +39,7 @@ export class CanvasUtils {
       this.drawTransformHandles(ctx, annotation.bounds, scale);
     }
 
-    // Only draw label if showLabel is true and label exists
+    // Draw label if needed
     if (showLabel && annotation.label && annotation.bounds) {
       this.drawLabel(ctx, annotation.label, 
         { x: annotation.bounds.x, y: annotation.bounds.y }, scale);
@@ -79,7 +70,7 @@ export class CanvasUtils {
     bounds?: Annotation['bounds']
   ) {
     if (bounds) {
-      // Draw ellipse using bounds for transformed circles
+      // Draw ellipse using bounds
       const centerX = bounds.x + bounds.width / 2;
       const centerY = bounds.y + bounds.height / 2;
       const radiusX = bounds.width / 2;
@@ -122,6 +113,12 @@ export class CanvasUtils {
         ctx.arc(handle.point.x, handle.point.y, handleSize / 2, 0, 2 * Math.PI);
         ctx.fill();
         ctx.stroke();
+        
+        // Draw line connecting to shape
+        ctx.beginPath();
+        ctx.moveTo(handle.point.x, handle.point.y + handleSize / 2);
+        ctx.lineTo(bounds.x + bounds.width / 2, bounds.y);
+        ctx.stroke();
       } else {
         // Draw resize handles as squares
         ctx.fillRect(
@@ -161,7 +158,7 @@ export class CanvasUtils {
       { type: 'edge', position: 'w', point: { x, y: centerY } },
       
       // Rotation handle (above the shape)
-      { type: 'rotation', position: 'rotate', point: { x: centerX, y: y - 20 } }
+      { type: 'rotation', position: 'rotate', point: { x: centerX, y: y - 30 } }
     ];
   }
 
@@ -252,8 +249,18 @@ export class CanvasUtils {
     }
 
     // Ensure minimum size
-    newBounds.width = Math.max(10, newBounds.width);
-    newBounds.height = Math.max(10, newBounds.height);
+    newBounds.width = Math.max(10, Math.abs(newBounds.width));
+    newBounds.height = Math.max(10, Math.abs(newBounds.height));
+
+    // Handle negative dimensions
+    if (newBounds.width < 0) {
+      newBounds.x += newBounds.width;
+      newBounds.width = Math.abs(newBounds.width);
+    }
+    if (newBounds.height < 0) {
+      newBounds.y += newBounds.height;
+      newBounds.height = Math.abs(newBounds.height);
+    }
 
     return {
       ...annotation,
@@ -271,12 +278,23 @@ export class CanvasUtils {
     position: Point, 
     scale: number
   ) {
+    ctx.save();
     ctx.font = `${12 / scale}px Arial`;
+    ctx.setLineDash([]);
+    
+    const textWidth = ctx.measureText(label).width;
+    const padding = 4 / scale;
+    const height = 16 / scale;
+    
+    // Background
     ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-    ctx.fillRect(position.x, position.y - 20 / scale, 
-                 ctx.measureText(label).width + 8 / scale, 16 / scale);
+    ctx.fillRect(position.x, position.y - height - padding, textWidth + padding * 2, height);
+    
+    // Text
     ctx.fillStyle = 'white';
-    ctx.fillText(label, position.x + 4 / scale, position.y - 8 / scale);
+    ctx.fillText(label, position.x + padding, position.y - padding);
+    
+    ctx.restore();
   }
 
   static getPointInCanvas(
@@ -302,6 +320,13 @@ export class CanvasUtils {
 
     switch (annotation.type) {
       case 'rectangle':
+        if (annotation.points.length >= 2) {
+          const minX = Math.min(annotation.points[0].x, annotation.points[1].x);
+          const maxX = Math.max(annotation.points[0].x, annotation.points[1].x);
+          const minY = Math.min(annotation.points[0].y, annotation.points[1].y);
+          const maxY = Math.max(annotation.points[0].y, annotation.points[1].y);
+          return point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY;
+        }
         return false;
       case 'circle':
         if (annotation.points.length >= 2) {
