@@ -26,71 +26,105 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  
+  // Drawing states
   const [isDrawing, setIsDrawing] = useState(false);
   const [isTransforming, setIsTransforming] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [currentAnnotation, setCurrentAnnotation] = useState<Annotation | null>(null);
+  
+  // Transform states
   const [transformHandle, setTransformHandle] = useState<TransformHandle | null>(null);
   const [transformStartPoint, setTransformStartPoint] = useState<Point | null>(null);
   const [dragStartPoint, setDragStartPoint] = useState<Point | null>(null);
+  const [originalAnnotation, setOriginalAnnotation] = useState<Annotation | null>(null);
+  
+  // View states
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState<Point>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [lastMousePos, setLastMousePos] = useState<Point>({ x: 0, y: 0 });
   const [cursor, setCursor] = useState('default');
+  
+  // Rendering optimization
+  const [needsRedraw, setNeedsRedraw] = useState(true);
 
+  // Preload and cache image
+  useEffect(() => {
+    if (!image) {
+      imageRef.current = null;
+      return;
+    }
+
+    const img = new Image();
+    img.onload = () => {
+      imageRef.current = img;
+      setNeedsRedraw(true);
+    };
+    img.src = image.url;
+  }, [image]);
+
+  // Optimized draw function
   const draw = useCallback(() => {
-    if (!image || !canvasRef.current) return;
+    if (!image || !canvasRef.current || !imageRef.current) return;
     
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d')!;
     
-    // Clear canvas
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Clear canvas with solid background
+    ctx.fillStyle = '#f8f9fa';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     
-    // Save context
+    // Save context for transformations
     ctx.save();
     
-    // Apply transformations
+    // Apply view transformations
     ctx.scale(scale, scale);
     ctx.translate(offset.x, offset.y);
     
-    // Draw image
-    const img = new Image();
-    img.onload = () => {
-      ctx.drawImage(img, 0, 0);
-      
-      // Draw annotations
-      image.annotations.forEach(annotation => {
-        if (visibleAnnotations.has(annotation.id)) {
-          const isSelected = selectedAnnotation === annotation.id;
-          const showTransformHandles = isSelected && activeTool === 'select';
-          
-          CanvasUtils.drawAnnotation(
-            ctx, 
-            annotation, 
-            scale, 
-            isSelected,
-            false, // Don't show labels on canvas
-            showTransformHandles
-          );
-        }
-      });
-      
-      // Draw current annotation being created
-      if (currentAnnotation) {
-        CanvasUtils.drawAnnotation(ctx, currentAnnotation, scale, true, false, false);
+    // Draw image (using cached image)
+    ctx.drawImage(imageRef.current, 0, 0);
+    
+    // Draw all visible annotations
+    image.annotations.forEach(annotation => {
+      if (visibleAnnotations.has(annotation.id)) {
+        const isSelected = selectedAnnotation === annotation.id;
+        const showTransformHandles = isSelected && activeTool === 'select' && !isDrawing;
+        
+        CanvasUtils.drawAnnotation(
+          ctx, 
+          annotation, 
+          scale, 
+          isSelected,
+          false, // Don't show labels on canvas to reduce clutter
+          showTransformHandles
+        );
       }
-      
-      ctx.restore();
-    };
-    img.src = image.url;
-  }, [image, scale, offset, currentAnnotation, selectedAnnotation, visibleAnnotations, activeTool]);
+    });
+    
+    // Draw current annotation being created
+    if (currentAnnotation && isDrawing) {
+      CanvasUtils.drawAnnotation(ctx, currentAnnotation, scale, true, false, false);
+    }
+    
+    ctx.restore();
+    setNeedsRedraw(false);
+  }, [image, scale, offset, currentAnnotation, selectedAnnotation, visibleAnnotations, activeTool, isDrawing]);
 
+  // Trigger redraw when needed
   useEffect(() => {
-    draw();
-  }, [draw]);
+    if (needsRedraw) {
+      draw();
+    }
+  }, [draw, needsRedraw]);
 
+  // Mark for redraw when dependencies change
+  useEffect(() => {
+    setNeedsRedraw(true);
+  }, [image, selectedAnnotation, visibleAnnotations, activeTool]);
+
+  // Initialize canvas and view
   useEffect(() => {
     if (!image || !canvasRef.current || !containerRef.current) return;
     
@@ -98,8 +132,9 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
     const container = containerRef.current;
     
     // Set canvas size to container size
-    canvas.width = container.clientWidth;
-    canvas.height = container.clientHeight;
+    const rect = container.getBoundingClientRect();
+    canvas.width = rect.width;
+    canvas.height = rect.height;
     
     // Calculate initial scale to fit image
     const scaleX = canvas.width / image.width;
@@ -111,6 +146,8 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       x: (canvas.width / initialScale - image.width) / 2,
       y: (canvas.height / initialScale - image.height) / 2
     });
+    
+    setNeedsRedraw(true);
   }, [image]);
 
   const handleMouseDown = useCallback((event: React.MouseEvent) => {
@@ -124,7 +161,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
     );
     
     if (activeTool === 'select') {
-      // Check if clicking on a transform handle first
+      // Check for transform handle first
       const selectedAnnotationObj = image.annotations.find(ann => ann.id === selectedAnnotation);
       if (selectedAnnotationObj && selectedAnnotationObj.bounds) {
         const handle = CanvasUtils.getHandleAtPoint(point, selectedAnnotationObj.bounds, 8 / scale);
@@ -132,18 +169,20 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
           setIsTransforming(true);
           setTransformHandle(handle);
           setTransformStartPoint(point);
+          setOriginalAnnotation({ ...selectedAnnotationObj });
           return;
         }
       }
 
-      // Check if clicking on the selected annotation for dragging
+      // Check for annotation dragging
       if (selectedAnnotationObj && CanvasUtils.isPointInAnnotation(point, selectedAnnotationObj)) {
         setIsDragging(true);
         setDragStartPoint(point);
+        setOriginalAnnotation({ ...selectedAnnotationObj });
         return;
       }
 
-      // Check if clicking on any other annotation
+      // Check for annotation selection
       const clickedAnnotation = image.annotations.find(annotation =>
         visibleAnnotations.has(annotation.id) && 
         CanvasUtils.isPointInAnnotation(point, annotation)
@@ -152,13 +191,13 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       if (clickedAnnotation) {
         onAnnotationSelect(clickedAnnotation.id);
       } else {
-        onAnnotationSelect(''); // Deselect
-        // Start panning if not clicking on annotation
+        onAnnotationSelect('');
+        // Start panning
         setIsPanning(true);
         setLastMousePos({ x: event.clientX, y: event.clientY });
       }
     } else {
-      // Start drawing
+      // Start drawing new annotation
       setIsDrawing(true);
       const newAnnotation: Annotation = {
         id: `annotation-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -184,11 +223,10 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       offset
     );
 
-    // Update cursor based on what's under the mouse
+    // Update cursor
     if (activeTool === 'select') {
       let newCursor = 'default';
       
-      // Check if hovering over selected annotation's handles
       if (selectedAnnotation) {
         const selectedAnnotationObj = image.annotations.find(ann => ann.id === selectedAnnotation);
         if (selectedAnnotationObj && selectedAnnotationObj.bounds) {
@@ -201,13 +239,11 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
         }
       }
       
-      // Check if hovering over any other annotation
       if (newCursor === 'default') {
         const hoveredAnnotation = image.annotations.find(annotation =>
           visibleAnnotations.has(annotation.id) && 
           CanvasUtils.isPointInAnnotation(point, annotation)
         );
-        
         if (hoveredAnnotation) {
           newCursor = 'pointer';
         }
@@ -218,7 +254,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       setCursor('crosshair');
     }
     
-    // Handle different mouse interactions
+    // Handle interactions
     if (isPanning) {
       const deltaX = event.clientX - lastMousePos.x;
       const deltaY = event.clientY - lastMousePos.y;
@@ -229,39 +265,38 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       }));
       
       setLastMousePos({ x: event.clientX, y: event.clientY });
-    } else if (isTransforming && transformHandle && transformStartPoint && selectedAnnotation) {
-      const selectedAnnotationObj = image.annotations.find(ann => ann.id === selectedAnnotation);
-      if (selectedAnnotationObj) {
-        const transformedAnnotation = CanvasUtils.transformAnnotation(
-          selectedAnnotationObj,
-          transformHandle,
-          transformStartPoint,
-          point
-        );
-        onAnnotationUpdate(transformedAnnotation);
-      }
-    } else if (isDragging && dragStartPoint && selectedAnnotation) {
-      const selectedAnnotationObj = image.annotations.find(ann => ann.id === selectedAnnotation);
-      if (selectedAnnotationObj && selectedAnnotationObj.bounds) {
-        const deltaX = point.x - dragStartPoint.x;
-        const deltaY = point.y - dragStartPoint.y;
-        
-        const draggedAnnotation = {
-          ...selectedAnnotationObj,
-          bounds: {
-            ...selectedAnnotationObj.bounds,
-            x: selectedAnnotationObj.bounds.x + deltaX,
-            y: selectedAnnotationObj.bounds.y + deltaY
-          },
-          points: selectedAnnotationObj.points.map(p => ({
-            x: p.x + deltaX,
-            y: p.y + deltaY
-          }))
-        };
-        
-        onAnnotationUpdate(draggedAnnotation);
-        setDragStartPoint(point);
-      }
+      setNeedsRedraw(true);
+      
+    } else if (isTransforming && transformHandle && transformStartPoint && originalAnnotation) {
+      const transformedAnnotation = CanvasUtils.transformAnnotation(
+        originalAnnotation,
+        transformHandle,
+        transformStartPoint,
+        point
+      );
+      onAnnotationUpdate(transformedAnnotation);
+      setNeedsRedraw(true);
+      
+    } else if (isDragging && dragStartPoint && originalAnnotation && originalAnnotation.bounds) {
+      const deltaX = point.x - dragStartPoint.x;
+      const deltaY = point.y - dragStartPoint.y;
+      
+      const draggedAnnotation = {
+        ...originalAnnotation,
+        bounds: {
+          ...originalAnnotation.bounds,
+          x: originalAnnotation.bounds.x + deltaX,
+          y: originalAnnotation.bounds.y + deltaY
+        },
+        points: originalAnnotation.points.map(p => ({
+          x: p.x + deltaX,
+          y: p.y + deltaY
+        }))
+      };
+      
+      onAnnotationUpdate(draggedAnnotation);
+      setNeedsRedraw(true);
+      
     } else if (isDrawing && currentAnnotation) {
       let updatedAnnotation = { ...currentAnnotation };
       
@@ -291,10 +326,11 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       }
       
       setCurrentAnnotation(updatedAnnotation);
+      setNeedsRedraw(true);
     }
   }, [image, isDrawing, isPanning, isTransforming, isDragging, currentAnnotation, scale, offset, 
       lastMousePos, transformHandle, transformStartPoint, dragStartPoint, selectedAnnotation, 
-      onAnnotationUpdate, activeTool, visibleAnnotations]);
+      originalAnnotation, onAnnotationUpdate, activeTool, visibleAnnotations]);
 
   const handleMouseUp = useCallback(() => {
     if (isPanning) {
@@ -305,11 +341,13 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       setIsTransforming(false);
       setTransformHandle(null);
       setTransformStartPoint(null);
+      setOriginalAnnotation(null);
     }
     
     if (isDragging) {
       setIsDragging(false);
       setDragStartPoint(null);
+      setOriginalAnnotation(null);
     }
     
     if (isDrawing && currentAnnotation) {
@@ -322,15 +360,19 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
         onAnnotationAdd(currentAnnotation);
       }
       setCurrentAnnotation(null);
+      setNeedsRedraw(true);
     }
   }, [isDrawing, isPanning, isTransforming, isDragging, currentAnnotation, onAnnotationAdd]);
 
+  // Zoom controls
   const handleZoomIn = () => {
     setScale(prev => Math.min(5, prev * 1.2));
+    setNeedsRedraw(true);
   };
 
   const handleZoomOut = () => {
     setScale(prev => Math.max(0.1, prev / 1.2));
+    setNeedsRedraw(true);
   };
 
   const handleResetView = () => {
@@ -346,6 +388,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       x: (canvas.width / newScale - image.width) / 2,
       y: (canvas.height / newScale - image.height) / 2
     });
+    setNeedsRedraw(true);
   };
 
   const handleFitToScreen = () => {
@@ -361,6 +404,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       x: (canvas.width / newScale - image.width) / 2,
       y: (canvas.height / newScale - image.height) / 2
     });
+    setNeedsRedraw(true);
   };
 
   if (!image) {
@@ -382,7 +426,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
           </span>
           {selectedAnnotation && (
             <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded">
-              Selected - Use handles to transform
+              Selected - Use handles to transform or drag to move
             </span>
           )}
         </div>
@@ -432,7 +476,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp} // Handle mouse leaving canvas
+          onMouseLeave={handleMouseUp}
           className="w-full h-full"
         />
       </div>

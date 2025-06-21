@@ -13,7 +13,7 @@ export class CanvasUtils {
     
     // Set styles
     ctx.strokeStyle = annotation.color;
-    ctx.fillStyle = annotation.color + '20';
+    ctx.fillStyle = annotation.color + '20'; // Semi-transparent fill
     ctx.lineWidth = 2 / scale;
     
     if (isSelected) {
@@ -24,7 +24,7 @@ export class CanvasUtils {
       ctx.setLineDash([]);
     }
 
-    // Draw the shape without transformations first
+    // Draw the shape
     switch (annotation.type) {
       case 'rectangle':
         this.drawRectangle(ctx, annotation.points, annotation.bounds);
@@ -108,7 +108,7 @@ export class CanvasUtils {
 
     handles.forEach(handle => {
       if (handle.type === 'rotation') {
-        // Draw rotation handle as a circle
+        // Draw rotation handle as a circle with connection line
         ctx.beginPath();
         ctx.arc(handle.point.x, handle.point.y, handleSize / 2, 0, 2 * Math.PI);
         ctx.fill();
@@ -248,11 +248,11 @@ export class CanvasUtils {
         };
     }
 
-    // Ensure minimum size
+    // Ensure minimum size and handle negative dimensions
     newBounds.width = Math.max(10, Math.abs(newBounds.width));
     newBounds.height = Math.max(10, Math.abs(newBounds.height));
 
-    // Handle negative dimensions
+    // Handle negative dimensions by adjusting position
     if (newBounds.width < 0) {
       newBounds.x += newBounds.width;
       newBounds.width = Math.abs(newBounds.width);
