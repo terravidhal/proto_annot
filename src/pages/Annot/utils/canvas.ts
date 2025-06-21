@@ -9,19 +9,26 @@ export class CanvasUtils {
     showLabel: boolean = true,
     showTransformHandles: boolean = false
   ) {
+    // Save context state
     ctx.save();
     
-    // Set styles
+    // Set base styles
     ctx.strokeStyle = annotation.color;
     ctx.fillStyle = annotation.color + '20'; // Semi-transparent fill
     ctx.lineWidth = 2 / scale;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     
+    // Selection styling
     if (isSelected) {
-      ctx.setLineDash([5 / scale, 5 / scale]);
+      ctx.setLineDash([8 / scale, 4 / scale]);
       ctx.lineWidth = 3 / scale;
       ctx.strokeStyle = '#3B82F6'; // Blue for selected
+      ctx.shadowColor = '#3B82F6';
+      ctx.shadowBlur = 4 / scale;
     } else {
       ctx.setLineDash([]);
+      ctx.shadowBlur = 0;
     }
 
     // Draw the shape
@@ -34,7 +41,7 @@ export class CanvasUtils {
         break;
     }
 
-    // Draw transform handles if selected and in transform mode
+    // Draw transform handles if needed
     if (isSelected && showTransformHandles && annotation.bounds) {
       this.drawTransformHandles(ctx, annotation.bounds, scale);
     }
@@ -54,13 +61,17 @@ export class CanvasUtils {
     bounds?: Annotation['bounds']
   ) {
     if (bounds) {
+      // Use bounds for consistent rendering
       ctx.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
       ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
     } else if (points.length >= 2) {
-      const width = points[1].x - points[0].x;
-      const height = points[1].y - points[0].y;
-      ctx.fillRect(points[0].x, points[0].y, width, height);
-      ctx.strokeRect(points[0].x, points[0].y, width, height);
+      const x = Math.min(points[0].x, points[1].x);
+      const y = Math.min(points[0].y, points[1].y);
+      const width = Math.abs(points[1].x - points[0].x);
+      const height = Math.abs(points[1].y - points[0].y);
+      
+      ctx.fillRect(x, y, width, height);
+      ctx.strokeRect(x, y, width, height);
     }
   }
 
@@ -82,11 +93,11 @@ export class CanvasUtils {
       ctx.stroke();
     } else if (points.length >= 2) {
       const center = points[0];
-      const radius = Math.sqrt(
-        Math.pow(points[1].x - center.x, 2) + Math.pow(points[1].y - center.y, 2)
-      );
+      const radiusX = Math.abs(points[1].x - center.x);
+      const radiusY = Math.abs(points[1].y - center.y);
+      
       ctx.beginPath();
-      ctx.arc(center.x, center.y, radius, 0, 2 * Math.PI);
+      ctx.ellipse(center.x, center.y, radiusX, radiusY, 0, 0, 2 * Math.PI);
       ctx.fill();
       ctx.stroke();
     }
@@ -101,10 +112,13 @@ export class CanvasUtils {
     const handles = this.getTransformHandles(bounds);
     
     ctx.save();
-    ctx.fillStyle = '#3B82F6';
-    ctx.strokeStyle = '#1E40AF';
-    ctx.lineWidth = 1 / scale;
+    
+    // Handle styles
+    ctx.fillStyle = '#FFFFFF';
+    ctx.strokeStyle = '#3B82F6';
+    ctx.lineWidth = 2 / scale;
     ctx.setLineDash([]);
+    ctx.shadowBlur = 0;
 
     handles.forEach(handle => {
       if (handle.type === 'rotation') {
@@ -114,25 +128,18 @@ export class CanvasUtils {
         ctx.fill();
         ctx.stroke();
         
-        // Draw line connecting to shape
+        // Draw connection line
         ctx.beginPath();
         ctx.moveTo(handle.point.x, handle.point.y + handleSize / 2);
         ctx.lineTo(bounds.x + bounds.width / 2, bounds.y);
         ctx.stroke();
       } else {
         // Draw resize handles as squares
-        ctx.fillRect(
-          handle.point.x - handleSize / 2,
-          handle.point.y - handleSize / 2,
-          handleSize,
-          handleSize
-        );
-        ctx.strokeRect(
-          handle.point.x - handleSize / 2,
-          handle.point.y - handleSize / 2,
-          handleSize,
-          handleSize
-        );
+        const x = handle.point.x - handleSize / 2;
+        const y = handle.point.y - handleSize / 2;
+        
+        ctx.fillRect(x, y, handleSize, handleSize);
+        ctx.strokeRect(x, y, handleSize, handleSize);
       }
     });
 
@@ -248,11 +255,7 @@ export class CanvasUtils {
         };
     }
 
-    // Ensure minimum size and handle negative dimensions
-    newBounds.width = Math.max(10, Math.abs(newBounds.width));
-    newBounds.height = Math.max(10, Math.abs(newBounds.height));
-
-    // Handle negative dimensions by adjusting position
+    // Handle negative dimensions by flipping
     if (newBounds.width < 0) {
       newBounds.x += newBounds.width;
       newBounds.width = Math.abs(newBounds.width);
@@ -261,6 +264,10 @@ export class CanvasUtils {
       newBounds.y += newBounds.height;
       newBounds.height = Math.abs(newBounds.height);
     }
+
+    // Ensure minimum size
+    newBounds.width = Math.max(10, newBounds.width);
+    newBounds.height = Math.max(10, newBounds.height);
 
     return {
       ...annotation,
@@ -279,20 +286,23 @@ export class CanvasUtils {
     scale: number
   ) {
     ctx.save();
-    ctx.font = `${12 / scale}px Arial`;
+    
+    ctx.font = `${12 / scale}px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`;
     ctx.setLineDash([]);
+    ctx.shadowBlur = 0;
     
     const textWidth = ctx.measureText(label).width;
-    const padding = 4 / scale;
-    const height = 16 / scale;
+    const padding = 6 / scale;
+    const height = 18 / scale;
     
-    // Background
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-    ctx.fillRect(position.x, position.y - height - padding, textWidth + padding * 2, height);
+    // Background with rounded corners effect
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    ctx.fillRect(position.x - padding/2, position.y - height - padding, textWidth + padding, height);
     
     // Text
     ctx.fillStyle = 'white';
-    ctx.fillText(label, position.x + padding, position.y - padding);
+    ctx.textBaseline = 'top';
+    ctx.fillText(label, position.x, position.y - height);
     
     ctx.restore();
   }
@@ -331,14 +341,11 @@ export class CanvasUtils {
       case 'circle':
         if (annotation.points.length >= 2) {
           const center = annotation.points[0];
-          const radius = Math.sqrt(
-            Math.pow(annotation.points[1].x - center.x, 2) + 
-            Math.pow(annotation.points[1].y - center.y, 2)
-          );
-          const distance = Math.sqrt(
-            Math.pow(point.x - center.x, 2) + Math.pow(point.y - center.y, 2)
-          );
-          return distance <= radius;
+          const radiusX = Math.abs(annotation.points[1].x - center.x);
+          const radiusY = Math.abs(annotation.points[1].y - center.y);
+          const dx = (point.x - center.x) / radiusX;
+          const dy = (point.y - center.y) / radiusY;
+          return (dx * dx + dy * dy) <= 1;
         }
         return false;
       default:

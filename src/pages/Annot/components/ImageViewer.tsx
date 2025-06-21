@@ -27,6 +27,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
   
   // Drawing states
   const [isDrawing, setIsDrawing] = useState(false);
@@ -47,82 +48,119 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
   const [lastMousePos, setLastMousePos] = useState<Point>({ x: 0, y: 0 });
   const [cursor, setCursor] = useState('default');
   
-  // Rendering optimization
-  const [needsRedraw, setNeedsRedraw] = useState(true);
+  // Rendering optimization - single source of truth
+  const [renderState, setRenderState] = useState({
+    needsRedraw: true,
+    isRendering: false
+  });
 
-  // Preload and cache image
+  // Preload and cache image with stable reference
   useEffect(() => {
     if (!image) {
       imageRef.current = null;
       return;
     }
 
-    const img = new Image();
-    img.onload = () => {
-      imageRef.current = img;
-      setNeedsRedraw(true);
-    };
-    img.src = image.url;
-  }, [image]);
+    // Only create new image if URL changed
+    if (!imageRef.current || imageRef.current.src !== image.url) {
+      const img = new Image();
+      img.onload = () => {
+        imageRef.current = img;
+        requestRender();
+      };
+      img.onerror = () => {
+        console.error('Failed to load image:', image.url);
+      };
+      img.src = image.url;
+    }
+  }, [image?.url]);
 
-  // Optimized draw function
-  const draw = useCallback(() => {
+  // Optimized render request function
+  const requestRender = useCallback(() => {
+    if (renderState.isRendering) return;
+    
+    setRenderState(prev => ({ ...prev, needsRedraw: true }));
+    
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+    
+    animationFrameRef.current = requestAnimationFrame(() => {
+      if (!renderState.needsRedraw) return;
+      
+      setRenderState({ needsRedraw: false, isRendering: true });
+      performRender();
+      setRenderState(prev => ({ ...prev, isRendering: false }));
+    });
+  }, [renderState.isRendering, renderState.needsRedraw]);
+
+  // Stable render function
+  const performRender = useCallback(() => {
     if (!image || !canvasRef.current || !imageRef.current) return;
     
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d')!;
     
-    // Clear canvas with solid background
+    // Disable image smoothing for crisp rendering
+    ctx.imageSmoothingEnabled = false;
+    
+    // Clear with solid background - no transparency
     ctx.fillStyle = '#f8f9fa';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
-    // Save context for transformations
+    // Save context state
     ctx.save();
     
-    // Apply view transformations
-    ctx.scale(scale, scale);
-    ctx.translate(offset.x, offset.y);
-    
-    // Draw image (using cached image)
-    ctx.drawImage(imageRef.current, 0, 0);
-    
-    // Draw all visible annotations
-    image.annotations.forEach(annotation => {
-      if (visibleAnnotations.has(annotation.id)) {
+    try {
+      // Apply view transformations
+      ctx.scale(scale, scale);
+      ctx.translate(offset.x, offset.y);
+      
+      // Draw image with stable reference
+      ctx.drawImage(imageRef.current, 0, 0, image.width, image.height);
+      
+      // Draw all visible annotations in one pass
+      const annotationsToDraw = image.annotations.filter(ann => visibleAnnotations.has(ann.id));
+      
+      annotationsToDraw.forEach(annotation => {
         const isSelected = selectedAnnotation === annotation.id;
-        const showTransformHandles = isSelected && activeTool === 'select' && !isDrawing;
+        const showTransformHandles = isSelected && activeTool === 'select' && !isDrawing && !isTransforming && !isDragging;
         
         CanvasUtils.drawAnnotation(
           ctx, 
           annotation, 
           scale, 
           isSelected,
-          false, // Don't show labels on canvas to reduce clutter
+          false, // No labels on canvas
           showTransformHandles
         );
+      });
+      
+      // Draw current annotation being created (only during drawing)
+      if (currentAnnotation && isDrawing) {
+        CanvasUtils.drawAnnotation(ctx, currentAnnotation, scale, true, false, false);
       }
-    });
-    
-    // Draw current annotation being created
-    if (currentAnnotation && isDrawing) {
-      CanvasUtils.drawAnnotation(ctx, currentAnnotation, scale, true, false, false);
+      
+    } catch (error) {
+      console.error('Render error:', error);
+    } finally {
+      ctx.restore();
     }
-    
-    ctx.restore();
-    setNeedsRedraw(false);
-  }, [image, scale, offset, currentAnnotation, selectedAnnotation, visibleAnnotations, activeTool, isDrawing]);
+  }, [image, scale, offset, currentAnnotation, selectedAnnotation, visibleAnnotations, activeTool, isDrawing, isTransforming, isDragging]);
 
-  // Trigger redraw when needed
+  // Request render when dependencies change
   useEffect(() => {
-    if (needsRedraw) {
-      draw();
-    }
-  }, [draw, needsRedraw]);
+    requestRender();
+  }, [image, selectedAnnotation, visibleAnnotations, activeTool, scale, offset, currentAnnotation]);
 
-  // Mark for redraw when dependencies change
+  // Cleanup animation frame on unmount
   useEffect(() => {
-    setNeedsRedraw(true);
-  }, [image, selectedAnnotation, visibleAnnotations, activeTool]);
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, []);
 
   // Initialize canvas and view
   useEffect(() => {
@@ -146,8 +184,6 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       x: (canvas.width / initialScale - image.width) / 2,
       y: (canvas.height / initialScale - image.height) / 2
     });
-    
-    setNeedsRedraw(true);
   }, [image]);
 
   const handleMouseDown = useCallback((event: React.MouseEvent) => {
@@ -223,7 +259,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       offset
     );
 
-    // Update cursor
+    // Update cursor (without triggering render)
     if (activeTool === 'select') {
       let newCursor = 'default';
       
@@ -249,12 +285,16 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
         }
       }
       
-      setCursor(newCursor);
-    } else if (activeTool !== 'select') {
+      if (cursor !== newCursor) {
+        setCursor(newCursor);
+      }
+    } else if (activeTool !== 'select' && cursor !== 'crosshair') {
       setCursor('crosshair');
     }
     
-    // Handle interactions
+    // Handle interactions with batched updates
+    let shouldRender = false;
+    
     if (isPanning) {
       const deltaX = event.clientX - lastMousePos.x;
       const deltaY = event.clientY - lastMousePos.y;
@@ -265,7 +305,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       }));
       
       setLastMousePos({ x: event.clientX, y: event.clientY });
-      setNeedsRedraw(true);
+      shouldRender = true;
       
     } else if (isTransforming && transformHandle && transformStartPoint && originalAnnotation) {
       const transformedAnnotation = CanvasUtils.transformAnnotation(
@@ -275,7 +315,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
         point
       );
       onAnnotationUpdate(transformedAnnotation);
-      setNeedsRedraw(true);
+      shouldRender = true;
       
     } else if (isDragging && dragStartPoint && originalAnnotation && originalAnnotation.bounds) {
       const deltaX = point.x - dragStartPoint.x;
@@ -295,7 +335,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       };
       
       onAnnotationUpdate(draggedAnnotation);
-      setNeedsRedraw(true);
+      shouldRender = true;
       
     } else if (isDrawing && currentAnnotation) {
       let updatedAnnotation = { ...currentAnnotation };
@@ -326,13 +366,20 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       }
       
       setCurrentAnnotation(updatedAnnotation);
-      setNeedsRedraw(true);
+      shouldRender = true;
+    }
+    
+    // Single render request for all changes
+    if (shouldRender) {
+      requestRender();
     }
   }, [image, isDrawing, isPanning, isTransforming, isDragging, currentAnnotation, scale, offset, 
       lastMousePos, transformHandle, transformStartPoint, dragStartPoint, selectedAnnotation, 
-      originalAnnotation, onAnnotationUpdate, activeTool, visibleAnnotations]);
+      originalAnnotation, onAnnotationUpdate, activeTool, visibleAnnotations, cursor, requestRender]);
 
   const handleMouseUp = useCallback(() => {
+    let shouldRender = false;
+    
     if (isPanning) {
       setIsPanning(false);
     }
@@ -342,12 +389,14 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       setTransformHandle(null);
       setTransformStartPoint(null);
       setOriginalAnnotation(null);
+      shouldRender = true;
     }
     
     if (isDragging) {
       setIsDragging(false);
       setDragStartPoint(null);
       setOriginalAnnotation(null);
+      shouldRender = true;
     }
     
     if (isDrawing && currentAnnotation) {
@@ -360,22 +409,24 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
         onAnnotationAdd(currentAnnotation);
       }
       setCurrentAnnotation(null);
-      setNeedsRedraw(true);
+      shouldRender = true;
     }
-  }, [isDrawing, isPanning, isTransforming, isDragging, currentAnnotation, onAnnotationAdd]);
+    
+    if (shouldRender) {
+      requestRender();
+    }
+  }, [isDrawing, isPanning, isTransforming, isDragging, currentAnnotation, onAnnotationAdd, requestRender]);
 
-  // Zoom controls
-  const handleZoomIn = () => {
+  // Zoom controls with render optimization
+  const handleZoomIn = useCallback(() => {
     setScale(prev => Math.min(5, prev * 1.2));
-    setNeedsRedraw(true);
-  };
+  }, []);
 
-  const handleZoomOut = () => {
+  const handleZoomOut = useCallback(() => {
     setScale(prev => Math.max(0.1, prev / 1.2));
-    setNeedsRedraw(true);
-  };
+  }, []);
 
-  const handleResetView = () => {
+  const handleResetView = useCallback(() => {
     if (!image || !canvasRef.current) return;
     
     const canvas = canvasRef.current;
@@ -388,10 +439,9 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       x: (canvas.width / newScale - image.width) / 2,
       y: (canvas.height / newScale - image.height) / 2
     });
-    setNeedsRedraw(true);
-  };
+  }, [image]);
 
-  const handleFitToScreen = () => {
+  const handleFitToScreen = useCallback(() => {
     if (!image || !canvasRef.current) return;
     
     const canvas = canvasRef.current;
@@ -404,8 +454,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       x: (canvas.width / newScale - image.width) / 2,
       y: (canvas.height / newScale - image.height) / 2
     });
-    setNeedsRedraw(true);
-  };
+  }, [image]);
 
   if (!image) {
     return (
@@ -465,7 +514,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       {/* Canvas */}
       <div 
         ref={containerRef}
-        className="relative w-full h-full overflow-hidden"
+        className="relative w-full h-full overflow-hidden bg-gray-100"
         style={{ 
           cursor: cursor,
           minHeight: '400px'
@@ -477,7 +526,12 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
-          className="w-full h-full"
+          className="w-full h-full block"
+          style={{ 
+            imageRendering: 'pixelated',
+            WebkitUserSelect: 'none',
+            userSelect: 'none'
+          }}
         />
       </div>
     </div>
